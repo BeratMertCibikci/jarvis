@@ -1,0 +1,10 @@
+flask>=3.0
+python-dotenv>=1.0
+google-genai>=1.40
+google-api-python-client>=2.100
+google-auth>=2.30
+google-auth-oauthlib>=1.2
+icalendar>=6.0
+ddgs>=9.0
+# Only needed for ENGINE=ollama:
+# ollama>=0.6

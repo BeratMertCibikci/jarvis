@@ -1,0 +1,787 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jarvis</title>
+<style>
+  /* HUD theme: always dark. Colors are defined once here and used below via var(--...). */
+  :root {
+    color-scheme: dark;
+    --bg:#0B1220;  --panel:#121C30; --line:#1E2A44; --line2:#2B5C9E;
+    --accent:#3D8BFF; --accent2:#6FB0FF;
+    --fg:#CFE3FF;  --fg-strong:#E6F1FF; --soft:#9FC2EE; --muted:#6F8BB3;
+    --me:#1F4E8F;  --code:#ffffff14;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; height:100vh; display:flex; flex-direction:column; background:var(--bg); color:var(--fg);
+         font-family: system-ui, sans-serif; }
+
+  /* ---------------- arc reactor (logo) */
+  .reactor { border-radius:50%; border:1px solid var(--line2); display:flex; align-items:center; justify-content:center; }
+  .reactor .ring { border-radius:50%; border:2px dashed var(--accent); display:flex; align-items:center; justify-content:center;
+                   animation: spin 24s linear infinite; }
+  .reactor .core { border-radius:50%; background:#12305C; border:1px solid var(--accent2); color:var(--fg-strong);
+                   display:flex; align-items:center; justify-content:center; font-family:var(--mono);
+                   animation: spin 24s linear infinite reverse; /* keeps the J upright while the ring spins */ }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .reactor .ring, .reactor .core { animation:none; } }
+
+  /* ---------------- top bar (chat view only) */
+  header { display:flex; align-items:center; gap:10px; padding:10px 16px; max-width:1100px; width:100%; margin:0 auto;
+           border-bottom:0.5px solid var(--line); }
+  header .reactor { width:24px; height:24px; border-style:dashed; border-color:var(--accent); font-size:11px;
+                    font-family:var(--mono); color:var(--fg-strong); }
+  header b { font-family:var(--mono); font-weight:400; letter-spacing:.18em; color:var(--fg-strong); font-size:14px; }
+  #newChat, #calToggle { height:auto; background:none; color:var(--soft); border:0.5px solid var(--line2);
+             padding:5px 11px; font-size:13px; font-family:var(--mono); }
+  #newChat { margin-left:auto; }
+  #calToggle { display:none; }  /* only shown on narrow screens, see the @media rule below */
+  #newChat:hover, #calToggle:hover, body.cal-open #calToggle { border-color:var(--accent); color:var(--fg-strong); }
+
+  /* ---------------- welcome screen */
+  #welcome { display:none; text-align:center; padding:0 16px; }
+  #welcome .reactor { width:104px; height:104px; margin:0 auto 14px; }
+  #welcome .ring { width:78px; height:78px; }
+  #welcome .core { width:42px; height:42px; font-size:17px; }
+  #welcome h1 { font-family:var(--mono); font-weight:400; font-size:17px; letter-spacing:.22em; color:var(--fg-strong); margin:0 0 4px; }
+  #greet { font-family:var(--mono); font-size:12px; color:var(--muted); margin:0 0 1.5rem; }
+  #next { max-width:440px; margin:0 auto 1rem; text-align:left; border:0.5px solid var(--line2); border-radius:10px;
+          padding:12px 14px; display:none; align-items:center; gap:14px; }
+  #next .k { font-family:var(--mono); font-size:11px; letter-spacing:.15em; color:var(--muted); margin:0 0 6px; }
+  #next .t { font-size:16px; color:var(--fg-strong); margin:0 0 3px; }
+  #next .d { font-size:12px; color:var(--soft); font-family:var(--mono); }
+  #next .cd { text-align:center; border-left:0.5px solid #1E3A66; padding-left:14px; min-width:72px; }
+  #next .cd b { display:block; font-family:var(--mono); font-weight:400; font-size:22px; color:var(--accent2); line-height:1; }
+  #next .cd span { display:block; font-family:var(--mono); font-size:11px; color:var(--muted); margin-top:4px; }
+  #later { max-width:440px; margin:0 auto 1.25rem; text-align:left; font-family:var(--mono); font-size:12px; color:var(--muted); }
+  #later div { display:flex; gap:12px; padding:3px 2px; }
+  #later span:first-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #later span:last-child { margin-left:auto; flex-shrink:0; }
+  #chips { display:none; text-align:center; padding:0 16px 8px; }
+  .chip { display:inline-block; height:auto; font-family:var(--mono); font-size:12px; padding:6px 12px; margin:3px;
+          background:none; border:0.5px solid var(--line2); border-radius:999px; color:var(--soft); }
+  .chip:hover { border-color:var(--accent); color:var(--fg-strong); }
+
+  /* Welcome mode: top bar and messages hidden, everything centered on screen. */
+  body.welcome { justify-content:center; }
+  body.welcome header, body.welcome #log, body.welcome #agenda { display:none; }
+  body.welcome main { flex:none; }
+  body.welcome #welcome, body.welcome #chips { display:block; }
+  body.welcome form { max-width:472px; }
+
+  /* ---------------- two columns: chat on the left, agenda on the right */
+  main { flex:1; min-height:0; display:flex; width:100%; max-width:1100px; margin:0 auto; position:relative; }
+  #chatCol { flex:1; min-width:0; display:flex; flex-direction:column; }
+
+  /* ---------------- agenda panel */
+  #agenda { width:300px; flex-shrink:0; overflow-y:auto; padding:14px 16px; border-left:0.5px solid var(--line);
+            font-family:var(--mono); font-size:12px; }
+  #agenda .k { font-size:11px; letter-spacing:.15em; color:var(--muted); margin:0 0 12px; }
+  #agenda .day { margin:0 0 14px; }
+  #agenda .dayh { font-size:11px; color:var(--soft); margin:0 0 4px; }
+  #agenda .dayh.today { color:var(--accent2); }
+  #agenda .ev { display:flex; gap:10px; padding:4px 6px; margin:0 -6px; border-radius:6px; }
+  #agenda .ev .tm { color:var(--muted); width:44px; flex-shrink:0; }
+  #agenda .ev .tt { font-family:system-ui, sans-serif; font-size:13px; color:var(--fg-strong); min-width:0; }
+  #agenda .ev .loc { display:block; font-family:var(--mono); font-size:11px; color:var(--muted);
+                     overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #agenda .now { margin-left:auto; flex-shrink:0; font-size:10px; color:var(--accent2); }
+  #agenda .msgline { color:var(--muted); line-height:1.6; }
+  #agenda .retry { height:auto; margin-top:8px; padding:5px 11px; background:none; border:0.5px solid var(--line2);
+                   color:var(--soft); font-family:var(--mono); font-size:12px; }
+  /* An event Jarvis just added (or rescheduled) glows green for a few seconds, then fades. */
+  #agenda .ev.fresh { animation: fresh 5s ease-out; }
+  @keyframes fresh { 0%, 40% { background:#14532D; box-shadow: inset 2px 0 #4ADE80; } 100% { background:transparent; } }
+
+  /* Narrow screens: the panel is hidden; the "calendar" button shows it IN PLACE of the messages
+     (not on top of them), so the input stays visible below. order:-1 moves it above the chat column. */
+  @media (max-width: 900px) {
+    #calToggle { display:inline-block; }
+    main { flex-direction:column; }
+    #agenda { display:none; width:100%; border-left:0; }
+    body.cal-open #agenda { display:block; flex:1; order:-1; }
+    body.cal-open #log { display:none; }
+    body.cal-open #chatCol { flex:none; }
+  }
+
+  /* ---------------- messages */
+  #log { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:10px;
+         max-width:720px; width:100%; margin:0 auto; }
+  .msg { padding:9px 13px; border-radius:12px; max-width:80%; line-height:1.45; overflow-wrap:anywhere; font-size:15px; }
+  .me { align-self:flex-end; background:var(--me); color:var(--fg-strong); white-space:pre-wrap; }
+  .bot { align-self:flex-start; background:var(--panel); border:0.5px solid #1E3A66; }
+  .msg img { max-width:200px; border-radius:10px; display:block; margin-top:6px; }
+
+  /* How the HTML generated from the assistant's markdown looks */
+  .bot p { margin:0 0 .6em; }
+  .bot p:last-child, .bot ul:last-child, .bot ol:last-child { margin-bottom:0; }
+  .bot ul, .bot ol { margin:.2em 0 .6em; padding-left:1.3em; }
+  .bot li { margin:.15em 0; }
+  .bot .h, .bot strong { font-weight:600; color:var(--fg-strong); }
+  .bot code { background:var(--code); padding:1px 5px; border-radius:5px; font-size:.9em; font-family:var(--mono); }
+  .bot a { color:var(--accent2); }
+
+  /* Tool steps: what Jarvis did before answering ("› searching the web: ... ✓") */
+  .steps { align-self:flex-start; max-width:85%; font-family:var(--mono); font-size:12px; color:var(--muted);
+           line-height:1.6; padding:0 4px; overflow-wrap:anywhere; }
+  .steps .ok { color:var(--accent2); }
+  .steps .bad { color:#F0997B; }
+
+  /* Approval card */
+  .card { align-self:flex-start; max-width:80%; min-width:260px; background:var(--panel); border:0.5px solid var(--line2);
+          border-radius:12px; padding:12px 14px; }
+  .card.danger { border-color:#7F2A2A; }
+  .card .k { font-family:var(--mono); font-size:11px; letter-spacing:.15em; color:var(--muted); margin:0 0 6px; }
+  .card .ttl { font-size:15px; color:var(--fg-strong); font-weight:600; margin:0 0 4px; }
+  .card .ln { font-size:13px; color:var(--soft); line-height:1.5; }
+  .card .btns { display:flex; gap:8px; margin-top:12px; }
+  .card .btns button { height:34px; padding:0 14px; font-size:13px; font-family:var(--mono); }
+  .card .no { background:none; border:0.5px solid var(--line2); color:var(--soft); }
+  .card.danger .yes { background:#B42318; }
+  .card .state { margin-top:10px; font-family:var(--mono); font-size:12px; color:var(--muted); }
+
+  /* "Typing..." animation: three dots blinking in turn */
+  .typing span { display:inline-block; width:7px; height:7px; margin:0 2px; border-radius:50%;
+                 background:var(--accent2); opacity:.3; animation:blink 1.2s infinite; }
+  .typing span:nth-child(2) { animation-delay:.2s; }
+  .typing span:nth-child(3) { animation-delay:.4s; }
+  @keyframes blink { 50% { opacity:1; } }
+
+  /* ---------------- photo preview and input box */
+  #preview { max-width:720px; width:100%; margin:0 auto; padding:0 12px; display:none; }
+  #preview.show { display:flex; align-items:center; gap:8px; }
+  #preview img { height:56px; border-radius:8px; }
+  #preview span { flex:1; font-size:13px; color:var(--muted); font-family:var(--mono); }
+  #preview button { height:auto; padding:0 6px; background:none; color:var(--soft); font-size:18px; }
+  form { display:flex; align-items:flex-end; gap:8px; padding:12px; max-width:720px; width:100%; margin:0 auto; }
+  textarea { flex:1; padding:12px; border-radius:10px; border:0.5px solid var(--line2); background:var(--bg); color:var(--fg-strong);
+             font:inherit; font-size:15px; line-height:1.35; resize:none; max-height:160px; outline:none; }
+  textarea:focus { border-color:var(--accent); }
+  textarea::placeholder { color:var(--muted); font-family:var(--mono); font-size:13px; }
+  button { height:46px; padding:0 16px; border:0; border-radius:10px; background:var(--accent); color:#fff; font-size:15px; cursor:pointer; }
+  button:disabled { opacity:.45; cursor:default; }
+  #attach { background:none; color:var(--accent2); font-size:20px; padding:0 8px; }
+  #send { font-family:var(--mono); font-size:18px; width:46px; padding:0; }
+  /* Frame shown while a photo is dragged over the page (the text comes from data-drop, set per language) */
+  body.dragging::after { content:attr(data-drop); position:fixed; inset:12px; border:2px dashed var(--accent);
+                         border-radius:16px; display:flex; align-items:center; justify-content:center; font-family:var(--mono);
+                         font-size:18px; color:var(--fg-strong); background:#3D8BFF14; pointer-events:none; }
+</style>
+</head>
+<body class="welcome">
+<!-- Texts marked with data-i18n are filled in from the I18N dictionary below, in the viewer's language. -->
+<header>
+  <div class="reactor">J</div><b>J.A.R.V.I.S.</b>
+  <button id="newChat" type="button" data-i18n="newChat">+ new chat</button>
+  <button id="calToggle" type="button" aria-expanded="false" aria-controls="agenda" data-i18n="calendar">calendar</button>
+</header>
+
+<section id="welcome">
+  <div class="reactor"><div class="ring"><div class="core">J</div></div></div>
+  <h1>J.A.R.V.I.S.</h1>
+  <p id="greet"></p>
+  <div id="next">
+    <div style="flex:1; min-width:0">
+      <div class="k" data-i18n="next">NEXT</div>
+      <div class="t" id="nextTitle"></div>
+      <div class="d" id="nextWhen"></div>
+    </div>
+    <div class="cd"><b id="cdBig"></b><span id="cdSmall"></span></div>
+  </div>
+  <div id="later"></div>
+</section>
+
+<main>
+<div id="chatCol">
+<div id="log" aria-live="polite"></div>
+<div id="preview"><img id="previewImg" alt=""><span data-i18n="photoAdded">photo attached</span><button id="removeImg" type="button" data-i18n-aria="removePhoto">✕</button></div>
+<form id="f">
+  <button id="attach" type="button" data-i18n-title="attachHint" data-i18n-aria="attach">📎</button>
+  <input type="file" id="file" accept="image/*" hidden>
+  <textarea id="in" rows="1" data-i18n-placeholder="placeholder" autofocus></textarea>
+  <button type="submit" id="send" data-i18n-aria="send">↑</button>
+</form>
+</div>
+<aside id="agenda" data-i18n-aria="agendaAria"></aside>
+</main>
+<div id="chips"></div>
+
+<script>
+// ------------------------------------------------------------------ languages
+// All user-facing text lives here. The server only sends language-neutral data (tool names,
+// codes, ISO dates); this dictionary turns it into sentences. To add a language, add a block.
+const I18N = {
+  en: {
+    locale: "en-GB",
+    newChat: "+ new chat", calendar: "calendar", next: "NEXT",
+    greet: (h) => h < 6 ? "good night" : h < 12 ? "good morning" : h < 18 ? "good afternoon" : "good evening",
+    systemsReady: "systems online",
+    emptyTitle: "Clear days ahead", emptyWhen: "no events in the next 60 days",
+    now: "now", today: "today", tomorrow: "tomorrow", allDay: "all day",
+    minLeft: () => "min to go", hoursLeft: (n) => n === 1 ? "hour to go" : "hours to go",
+    daysLeft: (n) => n === 1 ? "day to go" : "days to go",
+    placeholder: "› awaiting command_", photoAdded: "photo attached", removePhoto: "Remove photo",
+    attach: "Add photo", attachHint: "Add a photo (or paste with Cmd+V / drag and drop)", send: "Send",
+    drop: "drop the photo here", typing: "Jarvis is typing",
+    agenda: "AGENDA · 30 DAYS", agendaAria: "Agenda", agendaError: "Couldn't reach the calendar.",
+    agendaEmpty: "Nothing in the next 30 days.", retry: "try again",
+    chips: [{ say: "What's on today?", label: "What's on today?" },
+            { say: "What's on this week?", label: "This week" },
+            { attach: true, label: "Add a ticket photo" }],
+    steps: {
+      web_search: (d) => `searching the web: "${d}"`, fetch_page: (d) => `reading page: ${d}`,
+      list_events: (d) => d ? `checking the calendar: "${d}"` : "checking the calendar",
+      create_event: (d) => `adding event: ${d}`, update_event: () => "updating the event",
+      delete_event: () => "deleting the event", add_task: () => "adding a task", list_tasks: () => "checking tasks",
+      complete_task: () => "completing a task", remember: () => "taking a note", recall: () => "checking notes",
+      import_ics: (d, v) => v === "import" ? "importing the timetable" : "reading the timetable",
+    },
+    stepRejected: "✗ rejected", stepError: "✗ error",
+    approvalNeeded: "APPROVAL NEEDED", approve: "approve", del: "delete", cancel: "cancel",
+    approved: "approved ✓", cancelled: "cancelled", unanswered: "not answered · not done",
+    cardDelete: "Delete event", cardUpdate: "Update event", cardConflict: "Add despite the conflict",
+    cardImport: (n) => `Import ${n} classes`, conflictsWith: "Conflicts with", fieldTitle: "Title",
+    fieldPlace: "Place", descChanges: "The description will change",
+    notices: { stale_card: "This approval is no longer valid.", empty_reply: "Done.",
+               too_many_steps: "That took too many steps; could you simplify the request?",
+               server_error: "Something went wrong.", invalid_decision: "Something went wrong.",
+               network: "Couldn't reach the server." },
+  },
+  fr: {
+    locale: "fr-FR",
+    newChat: "+ nouvelle discussion", calendar: "agenda", next: "À VENIR",
+    greet: (h) => h < 6 ? "bonne nuit" : h < 12 ? "bonjour" : h < 18 ? "bon après-midi" : "bonsoir",
+    systemsReady: "systèmes opérationnels",
+    emptyTitle: "Rien de prévu", emptyWhen: "aucun événement dans les 60 prochains jours",
+    now: "en cours", today: "aujourd'hui", tomorrow: "demain", allDay: "toute la journée",
+    minLeft: (n) => n === 1 ? "min restante" : "min restantes", hoursLeft: (n) => n === 1 ? "heure restante" : "heures restantes",
+    daysLeft: (n) => n === 1 ? "jour restant" : "jours restants",
+    placeholder: "› en attente d'une commande_", photoAdded: "photo jointe", removePhoto: "Retirer la photo",
+    attach: "Ajouter une photo", attachHint: "Ajouter une photo (ou coller avec Cmd+V / glisser-déposer)", send: "Envoyer",
+    drop: "déposez la photo ici", typing: "Jarvis écrit",
+    agenda: "AGENDA · 30 JOURS", agendaAria: "Agenda", agendaError: "Impossible d'accéder à l'agenda.",
+    agendaEmpty: "Rien dans les 30 prochains jours.", retry: "réessayer",
+    chips: [{ say: "Qu'est-ce que j'ai aujourd'hui ?", label: "Aujourd'hui ?" },
+            { say: "Qu'est-ce que j'ai cette semaine ?", label: "Cette semaine" },
+            { attach: true, label: "Ajouter une photo de billet" }],
+    steps: {
+      web_search: (d) => `cherche sur le web : « ${d} »`, fetch_page: (d) => `lit la page : ${d}`,
+      list_events: (d) => d ? `consulte l'agenda : « ${d} »` : "consulte l'agenda",
+      create_event: (d) => `ajoute l'événement : ${d}`, update_event: () => "modifie l'événement",
+      delete_event: () => "supprime l'événement", add_task: () => "ajoute une tâche", list_tasks: () => "consulte les tâches",
+      complete_task: () => "termine une tâche", remember: () => "prend une note", recall: () => "consulte les notes",
+      import_ics: (d, v) => v === "import" ? "importe l'emploi du temps" : "lit l'emploi du temps",
+    },
+    stepRejected: "✗ refusé", stepError: "✗ erreur",
+    approvalNeeded: "VALIDATION REQUISE", approve: "valider", del: "supprimer", cancel: "annuler",
+    approved: "validé ✓", cancelled: "annulé", unanswered: "sans réponse · non effectué",
+    cardDelete: "Supprimer l'événement", cardUpdate: "Modifier l'événement", cardConflict: "Ajouter malgré le conflit",
+    cardImport: (n) => `Importer ${n} cours`, conflictsWith: "En conflit avec", fieldTitle: "Titre",
+    fieldPlace: "Lieu", descChanges: "La description sera modifiée",
+    notices: { stale_card: "Cette validation n'est plus valable.", empty_reply: "C'est fait.",
+               too_many_steps: "Trop d'étapes ; peux-tu simplifier la demande ?",
+               server_error: "Une erreur s'est produite.", invalid_decision: "Une erreur s'est produite.",
+               network: "Impossible de joindre le serveur." },
+  },
+  tr: {
+    locale: "tr-TR",
+    newChat: "+ yeni sohbet", calendar: "takvim", next: "SIRADAKİ",
+    greet: (h) => h < 6 ? "iyi geceler" : h < 12 ? "günaydın" : h < 18 ? "iyi günler" : "iyi akşamlar",
+    systemsReady: "sistemler hazır",
+    emptyTitle: "Önümüzde boş günler var", emptyWhen: "60 gün içinde etkinlik yok",
+    now: "şimdi", today: "bugün", tomorrow: "yarın", allDay: "tüm gün",
+    minLeft: () => "dk sonra", hoursLeft: () => "saat sonra", daysLeft: () => "gün sonra",
+    placeholder: "› komut bekleniyor_", photoAdded: "fotoğraf eklendi", removePhoto: "Fotoğrafı kaldır",
+    attach: "Fotoğraf ekle", attachHint: "Fotoğraf ekle (ya da Cmd+V ile yapıştır / sürükle bırak)", send: "Gönder",
+    drop: "fotoğrafı buraya bırak", typing: "Jarvis yazıyor",
+    agenda: "AJANDA · 30 GÜN", agendaAria: "Ajanda", agendaError: "Takvime ulaşılamadı.",
+    agendaEmpty: "Önümüzdeki 30 gün boş.", retry: "tekrar dene",
+    chips: [{ say: "Bugün ne var?", label: "Bugün ne var?" },
+            { say: "Bu hafta neler var?", label: "Bu hafta" },
+            { attach: true, label: "Bilet fotoğrafı ekle" }],
+    steps: {
+      web_search: (d) => `web'de arıyor: "${d}"`, fetch_page: (d) => `sayfayı okuyor: ${d}`,
+      list_events: (d) => d ? `takvime bakıyor: "${d}"` : "takvime bakıyor",
+      create_event: (d) => `etkinlik ekliyor: ${d}`, update_event: () => "etkinliği güncelliyor",
+      delete_event: () => "etkinliği siliyor", add_task: () => "görev ekliyor", list_tasks: () => "görevlere bakıyor",
+      complete_task: () => "görevi tamamlıyor", remember: () => "not alıyor", recall: () => "notlara bakıyor",
+      import_ics: (d, v) => v === "import" ? "ders programını içe aktarıyor" : "ders programını okuyor",
+    },
+    stepRejected: "✗ reddedildi", stepError: "✗ hata",
+    approvalNeeded: "ONAY GEREKİYOR", approve: "onayla", del: "sil", cancel: "vazgeç",
+    approved: "onaylandı ✓", cancelled: "vazgeçildi", unanswered: "yanıtlanmadı · yapılmadı",
+    cardDelete: "Etkinliği sil", cardUpdate: "Etkinliği güncelle", cardConflict: "Çakışmaya rağmen ekle",
+    cardImport: (n) => `${n} dersi takvime ekle`, conflictsWith: "Çakışıyor", fieldTitle: "Başlık",
+    fieldPlace: "Yer", descChanges: "Açıklama değişecek",
+    notices: { stale_card: "Bu onay artık geçerli değil.", empty_reply: "Tamam.",
+               too_many_steps: "Çok fazla adım denedim, isteği sadeleştirip tekrar dener misin?",
+               server_error: "Bir hata oluştu.", invalid_decision: "Bir hata oluştu.",
+               network: "Sunucuya ulaşılamadı." },
+  },
+};
+
+// Pick the language: ?lang=xx in the address wins (handy for testing or sharing a demo link),
+// otherwise the first of the browser's preferred languages we support, otherwise English.
+const LANG = [new URLSearchParams(location.search).get("lang"), ...(navigator.languages || [navigator.language])]
+  .map(l => (l || "").slice(0, 2).toLowerCase()).find(l => I18N[l]) || "en";
+const T = I18N[LANG];
+document.documentElement.lang = LANG;
+
+// Fill in the static texts marked in the HTML.
+for (const e of document.querySelectorAll("[data-i18n]")) e.textContent = T[e.dataset.i18n];
+for (const e of document.querySelectorAll("[data-i18n-placeholder]")) e.placeholder = T[e.dataset.i18nPlaceholder];
+for (const e of document.querySelectorAll("[data-i18n-title]")) e.title = T[e.dataset.i18nTitle];
+for (const e of document.querySelectorAll("[data-i18n-aria]")) e.setAttribute("aria-label", T[e.dataset.i18nAria]);
+document.body.dataset.drop = T.drop;
+
+const $ = (id) => document.getElementById(id);
+const log = $("log"), input = $("in"), form = $("f"), sendBtn = $("send");
+const fileInput = $("file"), preview = $("preview"), previewImg = $("previewImg");
+// The chat id is kept in the browser's persistent storage (localStorage): after a reload we
+// talk to the server with the same id and it finds the old conversation. try/catch: in a private
+// window localStorage may be off; then we just continue with an id for this tab only.
+function newSid() {
+  const id = crypto.randomUUID();
+  try { localStorage.setItem("sid", id); } catch {}
+  return id;
+}
+let sid;
+try { sid = localStorage.getItem("sid"); } catch {}
+sid = sid || newSid();
+let pendingImage = null;  // { mime_type, data (base64, without the "data:" prefix) }
+let sending = false;      // don't send twice while waiting for an answer
+
+// ------------------------------------------------------------------ markdown -> HTML
+// The model uses **bold**, lists and links in its answers. We turn them into HTML.
+// SECURITY: first we make every < > & " in the text harmless (esc). So even if the model (or a
+// web page it read) puts something like <script> in the text, it doesn't run; it just shows up
+// as text. Only AFTER that do we add HTML tags ourselves.
+function esc(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function inline(s) {  // inline formatting (s must already have gone through esc)
+  const a = (href, text) => `<a href="${href}" target="_blank" rel="noopener">${text}</a>`;
+  return s
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[^*\w])\*(?!\s)(.+?)\*(?!\*)/g, "$1<em>$2</em>")
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, t, h) => a(h, t))       // [text](link)
+    .replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, (_, pre, h) => pre + a(h, h));     // bare link
+}
+
+function md(text) {
+  const out = [];
+  let list = null, para = [];  // open list type ("ul"/"ol") and the paragraph lines collected so far
+  const flushPara = () => { if (para.length) out.push(`<p>${para.join("<br>")}</p>`); para = []; };
+  const closeList = () => { if (list) out.push(`</${list}>`); list = null; };
+  for (const line of esc(text).split("\n")) {
+    const bullet = line.match(/^\s*[-*•]\s+(.*)/), numbered = line.match(/^\s*\d+[.)]\s+(.*)/);
+    const heading = line.match(/^#{1,6}\s+(.*)/);
+    if (bullet || numbered) {
+      flushPara();
+      const type = bullet ? "ul" : "ol";
+      if (list !== type) { closeList(); out.push(`<${type}>`); list = type; }
+      out.push(`<li>${inline((bullet || numbered)[1])}</li>`);
+    } else if (heading) {
+      flushPara(); closeList(); out.push(`<p class="h">${inline(heading[1])}</p>`);
+    } else if (!line.trim()) {
+      flushPara(); closeList();   // empty line: paragraph/list ends
+    } else {
+      closeList(); para.push(inline(line));
+    }
+  }
+  flushPara(); closeList();
+  return out.join("");
+}
+
+// ------------------------------------------------------------------ small helpers
+// Create an element with a tag + class + text. The text is set with textContent (not innerHTML),
+// because event names come from the calendar and must not run even if they contain HTML.
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+
+// Short date like "Mon 5 Oct" / "lun. 5 oct." / "Pzt 5 Eki", and a time like "09:00".
+const fmtDay = (d) => d.toLocaleDateString(T.locale, { weekday: "short" }) + " " + d.getDate() + " " +
+                      d.toLocaleDateString(T.locale, { month: "short" });
+const fmtShort = (d) => d.getDate() + " " + d.toLocaleDateString(T.locale, { month: "short" });
+const fmtTime = (d) => d.toLocaleTimeString(T.locale, { hour: "2-digit", minute: "2-digit" });
+// "Mon 5 Oct · 09:00–10:00" (or "· all day")
+const fmtRange = (ev) => {
+  const s = new Date(ev.start);
+  return fmtDay(s) + " · " + (ev.all_day ? T.allDay : fmtTime(s) + (ev.end ? "–" + fmtTime(new Date(ev.end)) : ""));
+};
+
+// Difference in CALENDAR days between two dates (not in hours): 23:00 tonight and 01:00 tomorrow
+// are only 2 hours apart but on different days. Used by both the agenda and the countdown.
+const dayDiff = (d, from = new Date()) =>
+  Math.round((new Date(d).setHours(0, 0, 0, 0) - new Date(from).setHours(0, 0, 0, 0)) / 86400000);
+
+// ------------------------------------------------------------------ message bubbles
+function add(text, cls, imgDataUrl) {
+  const d = document.createElement("div");
+  d.className = "msg " + cls;
+  // Your message stays plain text; the assistant's is rendered as markdown.
+  if (text) cls === "bot" ? (d.innerHTML = md(text)) : d.appendChild(document.createTextNode(text));
+  if (imgDataUrl) {
+    const img = document.createElement("img");
+    img.src = imgDataUrl;
+    d.appendChild(img);
+  }
+  log.appendChild(d); log.scrollTop = log.scrollHeight;
+  return d;
+}
+
+// ------------------------------------------------------------------ tool steps and approval cards
+// A step from the server: {tool, detail, status: "ok"|"error"|"rejected", variant?}.
+// Each step is one line: "› searching the web: ... ✓"
+function stepLabel(st) {
+  if (st.label) return st.label;  // older format: label already written by the server
+  const fn = T.steps[st.tool];
+  return fn ? fn(st.detail, st.variant) : st.tool;
+}
+
+function addSteps(steps) {
+  if (!steps || !steps.length) return;
+  const d = el("div", "steps");
+  for (const st of steps) {
+    const line = el("div", null, "› " + stepLabel(st) + " ");
+    const mark = st.status === "ok" ? el("span", "ok", "✓")
+               : el("span", "bad", st.status === "rejected" ? T.stepRejected : T.stepError);
+    line.appendChild(mark);
+    d.appendChild(line);
+  }
+  log.appendChild(d); log.scrollTop = log.scrollHeight;
+}
+
+// The server describes a card as data ({action: "delete", event: {...}} etc., see
+// describe_action in tools.py); here it becomes a title + lines in the viewer's language.
+function cardText(card) {
+  if (card.title) return { title: card.title, lines: card.lines || [], danger: card.danger };  // older format
+  const ev = card.event || {};
+  switch (card.action) {
+    case "delete":
+      return { title: T.cardDelete, lines: [ev.title, fmtRange(ev)], danger: true };
+    case "update": {
+      const c = card.changes || {}, lines = [ev.title];
+      if (c.title) lines.push(`${T.fieldTitle} → ${c.title}`);
+      if (c.start) lines.push(`${fmtRange(ev)} → ${fmtRange({ start: c.start, end: c.end })}`);
+      if (c.location) lines.push(`${T.fieldPlace} → ${c.location}`);
+      if (c.description) lines.push(T.descChanges);
+      return { title: T.cardUpdate, lines };
+    }
+    case "create_conflict":
+      return { title: T.cardConflict, lines: [ev.title, fmtRange(ev),
+               ...(card.conflicts || []).map(x => `${T.conflictsWith}: ${x.title} (${fmtRange(x)})`)] };
+    case "import":
+      return { title: T.cardImport(card.count), lines: [card.file,
+               ...(card.sample || []).map(x => `${x.title} · ${fmtRange({ start: x.start, all_day: x.all_day })}`),
+               ...(card.count > (card.sample || []).length ? ["…"] : [])] };
+    default:
+      return { title: card.tool, lines: Object.entries(card.args || {}).map(([k, v]) => `${k}: ${v}`) };
+  }
+}
+
+let activeCard = null;  // the card waiting for an answer (at most one)
+
+function addCard(card) {
+  const { title, lines, danger } = cardText(card);
+  const d = el("div", "card" + (danger ? " danger" : ""));
+  d.append(el("div", "k", T.approvalNeeded), el("div", "ttl", title));
+  for (const line of lines) if (line) d.appendChild(el("div", "ln", line));
+  const btns = el("div", "btns");
+  const yes = el("button", "yes", danger ? T.del : T.approve), no = el("button", "no", T.cancel);
+  yes.type = no.type = "button";
+  yes.onclick = () => decide(card, d, "approve");
+  no.onclick = () => decide(card, d, "reject");
+  btns.append(yes, no); d.appendChild(btns);
+  log.appendChild(d); log.scrollTop = log.scrollHeight;
+  activeCard = { card, el: d };
+}
+
+// Close a card: remove the buttons and write the outcome instead.
+function closeCard(cardEl, text) {
+  cardEl.querySelector(".btns")?.remove();
+  cardEl.appendChild(el("div", "state", text));
+  if (activeCard?.el === cardEl) activeCard = null;
+}
+
+async function decide(card, cardEl, decision) {
+  if (sending) return;
+  closeCard(cardEl, decision === "approve" ? T.approved : T.cancelled);
+  await talk("/confirm", { session_id: sid, card_id: card.id, decision, lang: LANG });
+}
+
+// /chat and /confirm answer in the same shape: steps first, then the text, then a new card if any.
+// "notice" is a code for a short system message (e.g. "stale_card"), shown in the viewer's language.
+function render(data) {
+  addSteps(data.steps);
+  if (data.reply) add(data.reply, "bot");
+  else if (data.notice) add(T.notices[data.notice] || data.notice, "bot");
+  if (data.pending) addCard(data.pending);
+}
+
+// Send a request, show "typing" while waiting, draw the answer, refresh the agenda.
+async function talk(url, body) {
+  sending = true; sendBtn.disabled = true;
+  const wait = add("", "bot");
+  wait.classList.add("typing");
+  wait.innerHTML = "<span></span><span></span><span></span>";
+  wait.setAttribute("aria-label", T.typing);
+  let data;
+  try {
+    const r = await fetch(url, { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body) });
+    data = await r.json();
+  } catch { data = { reply: "", steps: [], notice: "network" }; }
+  wait.remove();
+  render(data);
+  sending = false; sendBtn.disabled = false;
+  loadAgenda();  // Jarvis may have changed the calendar; refresh the agenda, new events glow green
+}
+
+// ------------------------------------------------------------------ welcome screen
+// Two views: "welcome" (empty chat, Jarvis in the middle) and "chat" (messages). A single CSS
+// class on body decides which one shows; CSS does the hiding/showing.
+function setMode(mode) {
+  const wasWelcome = document.body.classList.contains("welcome");
+  document.body.classList.toggle("welcome", mode === "welcome");
+  if (mode === "welcome") { $("greet").textContent = T.greet(new Date().getHours()) + " · " + T.systemsReady; loadUpcoming(); }
+  else if (wasWelcome || !agendaKnown) loadAgenda();  // fill the agenda when switching to the chat
+}
+
+// The countdown on the right of the card: { big: large text, small: text under it }.
+function countdown(ev) {
+  const now = new Date(), start = new Date(ev.start), end = new Date(ev.end);
+  if (start <= now && now < end) return { big: "●", small: T.now };
+  const mins = Math.round((start - now) / 60000);
+  const days = dayDiff(start, now);
+  if (days === 0) {
+    if (mins < 60) return { big: mins, small: T.minLeft(mins) };
+    const h = Math.round(mins / 60);
+    return { big: h, small: T.hoursLeft(h) };
+  }
+  if (days === 1) return { big: T.tomorrow, small: ev.all_day ? T.allDay : fmtTime(start) };
+  return { big: days, small: T.daysLeft(days) };
+}
+
+async function loadUpcoming() {
+  const next = $("next"), later = $("later");
+  try {
+    const r = await fetch("/events/upcoming");
+    if (!r.ok) throw new Error("calendar unavailable");
+    const { events } = await r.json();
+    next.style.display = "flex";
+    later.innerHTML = "";
+    if (!events.length) {
+      $("nextTitle").textContent = T.emptyTitle;
+      $("nextWhen").textContent = T.emptyWhen;
+      $("cdBig").textContent = "—"; $("cdSmall").textContent = "";
+      return;
+    }
+    const [first, ...rest] = events;
+    const s = new Date(first.start);
+    $("nextTitle").textContent = first.title;
+    $("nextWhen").textContent = [fmtDay(s), first.all_day ? T.allDay : fmtTime(s), first.location]
+      .filter(Boolean).join(" · ");
+    const cd = countdown(first);
+    $("cdBig").textContent = cd.big; $("cdSmall").textContent = cd.small;
+    // The next two events: "› title · place ........ 28 Oct".
+    for (const ev of rest.slice(0, 2)) {
+      const row = el("div");
+      row.append(el("span", null, "› " + [ev.title, ev.location.split(",")[0]].filter(Boolean).join(" · ")),
+                 el("span", null, fmtShort(new Date(ev.start))));
+      later.appendChild(row);
+    }
+  } catch {
+    next.style.display = "none"; later.innerHTML = "";  // no calendar: the screen still opens, just without the summary
+  }
+}
+
+// ------------------------------------------------------------------ agenda panel
+// The events seen on the previous refresh: id -> start time. Comparing with the new list finds
+// newly added or rescheduled events. null = never loaded yet (don't light everything up on first load).
+let agendaKnown = null;
+
+async function loadAgenda() {
+  const box = $("agenda");
+  let events;
+  try {
+    const r = await fetch("/events/upcoming?days=30&limit=50");
+    if (!r.ok) throw new Error();
+    ({ events } = await r.json());
+  } catch {
+    box.replaceChildren(el("div", "k", T.agenda), el("div", "msgline", T.agendaError));
+    const retry = el("button", "retry", T.retry);
+    retry.type = "button"; retry.onclick = loadAgenda;
+    box.appendChild(retry);
+    return;
+  }
+
+  box.replaceChildren(el("div", "k", T.agenda));
+  if (!events.length) box.appendChild(el("div", "msgline", T.agendaEmpty));
+
+  const now = new Date();
+  let dayBox = null, lastKey = null, firstFresh = null;
+  for (const ev of events) {
+    const start = new Date(ev.start), end = new Date(ev.end);
+    // New day: open a new day heading, e.g. "today · Mon 5 Oct", "tomorrow · ...", "Sat 10 Oct".
+    const key = start.toDateString();
+    if (key !== lastKey) {
+      const dd = dayDiff(start, now), rel = dd <= 0 ? T.today : dd === 1 ? T.tomorrow : "";
+      dayBox = el("div", "day");
+      dayBox.appendChild(el("div", "dayh" + (rel ? " today" : ""), (rel ? rel + " · " : "") + fmtDay(start)));
+      box.appendChild(dayBox); lastKey = key;
+    }
+    const row = el("div", "ev");
+    row.appendChild(el("span", "tm", ev.all_day ? T.allDay : fmtTime(start)));
+    const title = el("span", "tt", ev.title);
+    if (ev.location) title.appendChild(el("span", "loc", ev.location));
+    row.appendChild(title);
+    row.title = [ev.title, ev.location].filter(Boolean).join(" · ");  // full text on hover
+    if (start <= now && now < end) row.appendChild(el("span", "now", T.now));
+    // An id we haven't seen before, or an event whose time changed: light it up green.
+    if (agendaKnown && agendaKnown.get(ev.id) !== ev.start) {
+      row.classList.add("fresh");
+      firstFresh = firstFresh || row;
+    }
+    dayBox.appendChild(row);
+  }
+  agendaKnown = new Map(events.map(e => [e.id, e.start]));
+  firstFresh?.scrollIntoView({ block: "nearest", behavior: "smooth" });  // make the new event visible
+}
+
+// On narrow screens the "calendar" button opens/closes the panel.
+function setCalOpen(open) {
+  document.body.classList.toggle("cal-open", open);
+  $("calToggle").setAttribute("aria-expanded", open);
+}
+$("calToggle").onclick = () => setCalOpen(!document.body.classList.contains("cal-open"));
+
+// Refresh the agenda every 5 minutes too, so "now" labels and day headings don't go stale
+// (only in the chat view and while the tab is visible; a background tab shouldn't send requests).
+setInterval(() => {
+  if (!document.body.classList.contains("welcome") && !document.hidden) loadAgenda();
+}, 5 * 60 * 1000);
+
+// Suggestion chips: clicking one sends that sentence. "Add a ticket photo" opens the file picker.
+for (const c of T.chips) {
+  const chip = el("button", "chip", c.label);
+  chip.type = "button";
+  chip.onclick = () => {
+    if (c.attach) return fileInput.click();
+    input.value = c.say;
+    form.requestSubmit();
+  };
+  $("chips").appendChild(chip);
+}
+
+// On load, ask the server for the old messages. If there are any: chat view, otherwise welcome screen.
+async function loadHistory() {
+  try {
+    const r = await fetch("/history?session_id=" + encodeURIComponent(sid));
+    const { messages, pending } = await r.json();
+    if (!messages.length) return setMode("welcome");
+    messages.forEach(m => m.role === "steps" ? addSteps(m.steps) : add(m.text, m.role));
+    if (pending) addCard(pending);  // a card waiting for an answer comes back after a reload
+    setMode("chat");
+  } catch { setMode("welcome"); }
+}
+loadHistory();
+
+// New chat: get a new id, clear the screen, go back to the welcome screen. The old chat stays in the database.
+$("newChat").onclick = () => {
+  sid = newSid();
+  log.innerHTML = "";
+  activeCard = null;
+  setMode("welcome");
+  input.focus();
+};
+
+// ------------------------------------------------------------------ input box
+// The textarea grows as you type (up to ~6 lines, then a scrollbar appears).
+// When it's empty we don't compute a height (it falls back to its natural one-line size): the
+// height measured for an empty box depends on the placeholder, which made it too tall when the
+// window happened to be narrow.
+function grow() {
+  if (!input.value) { input.style.height = ""; return; }
+  input.style.height = "auto"; input.style.height = input.scrollHeight + 2 + "px";
+}
+input.addEventListener("input", grow);
+window.addEventListener("resize", grow);  // the number of lines changes when the window is resized
+
+// Enter: send. Shift+Enter: new line. isComposing: on keyboards like Japanese/Chinese, Enter is
+// also used to pick characters and must not be mistaken for "send".
+input.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+    e.preventDefault();
+    form.requestSubmit();
+  }
+});
+
+// ------------------------------------------------------------------ adding photos
+// All three ways (📎 button, paste with Cmd+V, drag and drop) end up in the same function.
+function attachFile(file) {
+  if (!file || !file.type.startsWith("image/")) return false;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const dataUrl = reader.result;  // "data:image/jpeg;base64,...."
+    pendingImage = { mime_type: file.type, data: dataUrl.split(",")[1] };
+    previewImg.src = dataUrl;
+    preview.classList.add("show");
+    input.focus();
+  };
+  reader.readAsDataURL(file);
+  return true;
+}
+
+$("attach").onclick = () => fileInput.click();
+fileInput.onchange = () => attachFile(fileInput.files[0]);
+
+// Paste: if the clipboard holds an image (e.g. a screenshot), attach it; otherwise text is pasted normally.
+input.addEventListener("paste", (e) => {
+  const img = [...(e.clipboardData?.files || [])].find(f => f.type.startsWith("image/"));
+  if (img) { e.preventDefault(); attachFile(img); }
+});
+
+// Drag and drop: can be dropped anywhere on the page.
+let dragDepth = 0;  // counter, so the frame doesn't flicker while dragging over nested elements
+document.addEventListener("dragenter", (e) => { e.preventDefault(); dragDepth++; document.body.classList.add("dragging"); });
+document.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove("dragging"); } });
+document.addEventListener("dragover", (e) => e.preventDefault());
+document.addEventListener("drop", (e) => {
+  e.preventDefault(); dragDepth = 0; document.body.classList.remove("dragging");
+  attachFile(e.dataTransfer?.files?.[0]);
+});
+
+$("removeImg").onclick = () => {
+  pendingImage = null; fileInput.value = ""; preview.classList.remove("show");
+};
+
+// ------------------------------------------------------------------ sending
+form.onsubmit = async (e) => {
+  e.preventDefault();
+  const text = input.value.trim();
+  if (sending || (!text && !pendingImage)) return;  // don't send while waiting, or if both are empty
+
+  setMode("chat");   // the first message switches from the welcome screen to the chat
+  setCalOpen(false); // on narrow screens, close the agenda so the answer is visible
+  const imgForBubble = pendingImage ? previewImg.src : null;
+  add(text, "me", imgForBubble);
+
+  const body = { session_id: sid, message: text, lang: LANG };
+  if (pendingImage) body.image = pendingImage;
+
+  input.value = ""; grow(); pendingImage = null; fileInput.value = ""; preview.classList.remove("show");
+  // A new message while a card was waiting for an answer: the server counts that action as rejected.
+  if (activeCard) closeCard(activeCard.el, T.unanswered);
+  await talk("/chat", body);
+};
+</script>
+</body>
+</html>

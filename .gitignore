@@ -1,0 +1,14 @@
+# Secrets: never commit these
+.env
+credentials.json
+token.json
+
+# Personal data (conversations, tasks, saved preferences)
+*.db
+
+# Python / macOS clutter
+__pycache__/
+*.pyc
+.venv/
+venv/
+.DS_Store
